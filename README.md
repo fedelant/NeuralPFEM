@@ -9,7 +9,7 @@ Dependencies and installation
 TO DO 
 
 Usage
-=====
+-----
 All the following command must be launched in gns folder.
 For a list of all the possible flags that can be used to change options in the code:
 TO DO
