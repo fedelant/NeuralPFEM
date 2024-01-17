@@ -13,11 +13,11 @@ import numpy as np
 import os
 from pyevtk.hl import pointsToVTK
 
-flags.DEFINE_string("output_path", None, help="Directory where rollout.pkl are located")
-flags.DEFINE_string("output_file", None, help="Name of rollout .pkl file")
+flags.DEFINE_string("output_path", None, help="Directory where output.pkl are located.")
+flags.DEFINE_string("output_file", None, help="Name of output .pkl file.")
 flags.DEFINE_integer("step_stride", 3, help="Stride of steps to skip.") # TO DO 
 flags.DEFINE_bool("change_yz", False, help="Change y and z axis.") 
-flags.DEFINE_enum("output_mode", "gif", ["gif", "vtk"], help="Type of render output")
+flags.DEFINE_enum("output_mode", "gif", ["gif", "vtk"], help="Type of render output.")
 
 FLAGS = flags.FLAGS
 
@@ -37,10 +37,10 @@ class Render():
             input_name (str): Name of rollout .pkl file.
         """
 
-        # Srings to describe rollout cases for data and render.
-        rollout_cases = [
-            ["ground_truth_position", "Reality"], ["predicted_position", "GNS"]]
-        self.rollout_cases = rollout_cases
+        # Srings to describe output cases for data and render.
+        output_cases = [
+            [["ground_truth_position", "ground_truth_velocity"], "Reality"], [["predicted_position", "predicted_velocity"], "GNS"]]
+        self.output_cases = output_cases
         self.input_dir = input_dir
         self.input_name = input_name
         self.output_dir = input_dir
@@ -48,31 +48,31 @@ class Render():
 
         # Get trajectory.
         with open(f"{self.input_dir}{self.input_name}.pkl", "rb") as file:
-            rollout_data = pickle.load(file)
-        self.rollout_data = rollout_data
+            output_data = pickle.load(file)
+        self.output_data = output_data
         trajectory = {}
-        velocities_x = {}
-        velocities_y = {}
-        for rollout_case in rollout_cases:
-            trajectory[rollout_case[0][0]] = np.concatenate(
-                [rollout_data["initial_positions"], rollout_data[rollout_case[0][0]]], axis=0
+        velocity_x = {}
+        velocity_y = {}
+        for output_case in output_cases:
+            trajectory[output_case[0][0]] = np.concatenate(
+                [output_data["initial_position"], output_data[output_case[0][0]]], axis=0
             )
-            velocities_x[rollout_case[0][1]] = np.concatenate(
-                [rollout_data["initial_velocities"][:,:,0], rollout_data[rollout_case[0][1]][:,:,0]], axis=0
+            velocity_x[output_case[0][1]] = np.concatenate(
+                [output_data["initial_velocity"][:,:,0], output_data[output_case[0][1]][:,:,0]], axis=0
             )
-            velocities_y[rollout_case[0][1]] = np.concatenate(
-                [rollout_data["initial_velocities"][:,:,1], rollout_data[rollout_case[0][1]][:,:,1]], axis=0
+            velocity_y[output_case[0][1]] = np.concatenate(
+                [output_data["initial_velocity"][:,:,1], output_data[output_case[0][1]][:,:,1]], axis=0
             )
 
         self.trajectory = trajectory
-        self.velocities_x = velocities_x
-        self.velocities_y = velocities_y
+        self.velocity_x = velocity_x
+        self.velocity_y = velocity_y
 
         # Trajectory information.
-        self.dims = trajectory[rollout_cases[0][0][0]].shape[2]
-        self.num_particles = trajectory[rollout_cases[0][0][0]].shape[1]
-        self.num_steps = trajectory[rollout_cases[0][0][0]].shape[0]
-        self.boundaries = rollout_data["metadata"]["bounds"]
+        self.dims = trajectory[output_cases[0][0][0]].shape[2]
+        self.num_particles = trajectory[output_cases[0][0][0]].shape[1]
+        self.num_steps = trajectory[output_cases[0][0][0]].shape[0]
+        self.boundaries = output_data["metadata"]["bounds"]
 
     def render_gif_animation(
             self, point_size=1, timestep_stride=3, vertical_camera_angle=20, viewpoint_rotation=0.5, change_yz=False
@@ -103,8 +103,8 @@ class Render():
             axes = [ax1, ax2]
 
         # Define datacase name.
-        trajectory_datacases = [self.rollout_cases[0][0], self.rollout_cases[1][0]]
-        render_datacases = [self.rollout_cases[0][1], self.rollout_cases[1][1]]
+        trajectory_datacases = [self.output_cases[0][0], self.output_cases[1][0]]
+        render_datacases = [self.output_cases[0][1], self.output_cases[1][1]]
 
         # Get boundary of simulation.
         xboundary = self.boundaries[0]
@@ -124,8 +124,8 @@ class Render():
                     axes[j].set_aspect("equal")
                     axes[j].set_xlim([float(xboundary[0]), float(xboundary[1])])
                     axes[j].set_ylim([float(yboundary[0]), float(yboundary[1])])
-                    axes[j].scatter(self.trajectory[datacase][i][:, 0],
-                                        self.trajectory[datacase][i][:, 1], s=point_size, color='blue')
+                    axes[j].scatter(self.trajectory[datacase[0]][i][:, 0],
+                                        self.trajectory[datacase[0]][i][:, 1], s=point_size, color='blue')
                     axes[j].grid(True, which='both')
                     axes[j].set_title(render_datacases[j])
         '''
@@ -142,7 +142,21 @@ class Render():
                         axes[j].set_xlim([float(xboundary[0]), float(xboundary[1])])
                         axes[j].set_ylim([float(yboundary[0]), float(yboundary[1])])
                         axes[j].set_zlim([float(zboundary[0]), float(zboundary[1])])
-                        for mask, color in color_mask:
+                        for mask, color in color_mask:ModuleNotFoundError: No module named 'pyevtk'
+(base) fedelant@mauricio:~/tesi/pfem-gns$ conda activate gns
+(gns) fedelant@mauricio:~/tesi/pfem-gns$ python3 -m gns.render_output --output_mode="vtk" --output_path="gns/outputs/big/" --output_file="test_ex0"
+vtk saved to: gns/outputs/big/test_ex0...
+(gns) fedelant@mauricio:~/tesi/pfem-gns$ 
+
+
+
+
+
+
+
+
+
+
                             axes[j].scatter(self.trajectory[datacase][i][mask, 0],
                                             self.trajectory[datacase][i][mask, 1],
                                             self.trajectory[datacase][i][mask, 2], s=point_size, color=color)
@@ -184,28 +198,28 @@ class Render():
         """
         Write `.vtk` files for each timestep for each rollout case.
         """
-        for rollout_case, label in self.rollout_cases:
+        for output_case, label in self.output_cases:
             path = f"{self.output_dir}{self.output_name}_vtk-{label}"
             if not os.path.exists(path):
                 os.makedirs(path)
-            for i, coord in enumerate(self.trajectory[rollout_case[0]]):
+            for i, coord in enumerate(self.trajectory[output_case[0]]):
                 pointsToVTK(f"{path}/points{i}",
                             np.array(coord[:, 0]),
                             np.array(coord[:, 1]),
                             np.zeros_like(coord[:, 1]) if self.dims == 2 else np.array(coord[:, 2]),
-                            data={"Velocity x": self.velocities_x[rollout_case[1]][i],
-                                  "Velocity y": self.velocities_y[rollout_case[1]][i]})
-                                  #"Velocity magnitude": .sqrt(self.velocities_x[rollout_case[1]][i]**2 + self.velocities_y[rollout_case[1]][i]**2)})
+                            data={"Velocity x": self.velocity_x[output_case[1]][i],
+                                  "Velocity y": self.velocity_y[output_case[1]][i]})
+                                  #"Velocity magnitude": .sqrt(self.velocity_x[output_case[1]][i]**2 + self.velocity_y[output_case[1]][i]**2)})
         print(f"vtk saved to: {self.output_dir}{self.output_name}...")
 
 
 def main(_):
-    if not FLAGS.rollout_dir:
-        raise ValueError("A `rollout_dir` must be passed.")
-    if not FLAGS.rollout_name:
-        raise ValueError("A `rollout_name`must be passed.")
+    if not FLAGS.output_path:
+        raise ValueError("An output directory must be passed with --output_path.")
+    if not FLAGS.output_file:
+        raise ValueError("A output file name must be passed with --.")
 
-    render = Render(input_dir=FLAGS.rollout_dir, input_name=FLAGS.rollout_name)
+    render = Render(input_dir=FLAGS.output_path, input_name=FLAGS.output_file)
 
     if FLAGS.output_mode == "gif":
         render.render_gif_animation(
@@ -221,3 +235,4 @@ def main(_):
 
 if __name__ == '__main__':
     app.run(main)
+
