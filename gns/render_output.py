@@ -1,3 +1,7 @@
+"""
+Rendering of the simulator output as a gif or a vtk file.
+"""
+
 import pickle
 
 from absl import app
@@ -9,28 +13,31 @@ import numpy as np
 import os
 from pyevtk.hl import pointsToVTK
 
-flags.DEFINE_string("rollout_dir", None, help="Directory where rollout.pkl are located")
-flags.DEFINE_string("rollout_name", None, help="Name of rollout `.pkl` file")
-flags.DEFINE_integer("step_stride", 3, help="Stride of steps to skip.")
-flags.DEFINE_bool("change_yz", False, help="Change y and z axis.")
+flags.DEFINE_string("output_path", None, help="Directory where rollout.pkl are located")
+flags.DEFINE_string("output_file", None, help="Name of rollout .pkl file")
+flags.DEFINE_integer("step_stride", 3, help="Stride of steps to skip.") # TO DO 
+flags.DEFINE_bool("change_yz", False, help="Change y and z axis.") 
 flags.DEFINE_enum("output_mode", "gif", ["gif", "vtk"], help="Type of render output")
 
 FLAGS = flags.FLAGS
 
 class Render():
+
     """
-    Render rollout data into gif or vtk files
+    Render output data into gif or vtk files.
     """
 
     def __init__(self, input_dir, input_name):
+
         """
-            Initialize render class
+            Initialize render class.
 
         Args:
-            input_dir (str): Directory where rollout.pkl are located
-            input_name (str): Name of rollout `.pkl` file
+            input_dir (str): Directory where rollout.pkl are located.
+            input_name (str): Name of rollout .pkl file.
         """
-        # Texts to describe rollout cases for data and render
+
+        # Srings to describe rollout cases for data and render.
         rollout_cases = [
             ["ground_truth_position", "Reality"], ["predicted_position", "GNS"]]
         self.rollout_cases = rollout_cases
@@ -39,39 +46,52 @@ class Render():
         self.output_dir = input_dir
         self.output_name = input_name
 
-        # Get trajectory
+        # Get trajectory.
         with open(f"{self.input_dir}{self.input_name}.pkl", "rb") as file:
             rollout_data = pickle.load(file)
         self.rollout_data = rollout_data
         trajectory = {}
+        velocities_x = {}
+        velocities_y = {}
         for rollout_case in rollout_cases:
-            trajectory[rollout_case[0]] = np.concatenate(
-                [rollout_data["initial_position"], rollout_data[rollout_case[0]]], axis=0
+            trajectory[rollout_case[0][0]] = np.concatenate(
+                [rollout_data["initial_positions"], rollout_data[rollout_case[0][0]]], axis=0
             )
-        self.trajectory = trajectory
+            velocities_x[rollout_case[0][1]] = np.concatenate(
+                [rollout_data["initial_velocities"][:,:,0], rollout_data[rollout_case[0][1]][:,:,0]], axis=0
+            )
+            velocities_y[rollout_case[0][1]] = np.concatenate(
+                [rollout_data["initial_velocities"][:,:,1], rollout_data[rollout_case[0][1]][:,:,1]], axis=0
+            )
 
-        # Trajectory information
-        self.dims = trajectory[rollout_cases[0][0]].shape[2]
-        self.num_particles = trajectory[rollout_cases[0][0]].shape[1]
-        self.num_steps = trajectory[rollout_cases[0][0]].shape[0]
+        self.trajectory = trajectory
+        self.velocities_x = velocities_x
+        self.velocities_y = velocities_y
+
+        # Trajectory information.
+        self.dims = trajectory[rollout_cases[0][0][0]].shape[2]
+        self.num_particles = trajectory[rollout_cases[0][0][0]].shape[1]
+        self.num_steps = trajectory[rollout_cases[0][0][0]].shape[0]
         self.boundaries = rollout_data["metadata"]["bounds"]
 
     def render_gif_animation(
             self, point_size=1, timestep_stride=3, vertical_camera_angle=20, viewpoint_rotation=0.5, change_yz=False
     ):
+        
         """
-        Render `.gif` animation from `.pkl` trajectory data.
+        Render .gif animation from .pkl trajectory data.
 
         Args:
-            point_size (int): Size of particle in visualization
-            timestep_stride (int): Stride of steps to skip.
-            vertical_camera_angle (float): Vertical camera angle in degree
-            viewpoint_rotation (float): Viewpoint rotation in degree
+            point_size (int): Size of particle in visualization.
+            timestep_stride (int): Stride of steps to skip. 
+            vertical_camera_angle (float): Vertical camera angle in degree.
+            viewpoint_rotation (float): Viewpoint rotation in degree.
 
         Returns:
-            gif format animation
+            .gif file animation.
         """
-        # Init figures
+
+        # Init figures.
         fig = plt.figure()
         if self.dims == 2:
             ax1 = fig.add_subplot(1, 2, 1, projection='rectilinear')
@@ -82,24 +102,24 @@ class Render():
             ax2 = fig.add_subplot(1, 2, 2, projection='3d')
             axes = [ax1, ax2]
 
-        # Define datacase name
+        # Define datacase name.
         trajectory_datacases = [self.rollout_cases[0][0], self.rollout_cases[1][0]]
         render_datacases = [self.rollout_cases[0][1], self.rollout_cases[1][1]]
 
-        # Get boundary of simulation
+        # Get boundary of simulation.
         xboundary = self.boundaries[0]
         yboundary = self.boundaries[1]
         if self.dims == 3:
             zboundary = self.boundaries[2]
 
-        # Fig creating function for 2d
+        # Fig creating function for 2d.
         if self.dims == 2:
             def animate(i):
                 print(f"Render step {i}/{self.num_steps}")
 
                 fig.clear()
                 for j, datacase in enumerate(trajectory_datacases):
-                    # select ax to plot at set boundary
+                    # Select ax to plot at set boundary.
                     axes[j] = fig.add_subplot(1, 2, j + 1, autoscale_on=False)
                     axes[j].set_aspect("equal")
                     axes[j].set_xlim([float(xboundary[0]), float(xboundary[1])])
@@ -152,7 +172,8 @@ class Render():
                         axes[j].grid(True, which='both')
                         axes[j].set_title(render_datacases[j])
         '''
-        # Creat animation
+
+        # Create and save animation.
         ani = animation.FuncAnimation(
             fig, animate, frames=np.arange(0, self.num_steps, timestep_stride), interval=10)
 
@@ -167,14 +188,14 @@ class Render():
             path = f"{self.output_dir}{self.output_name}_vtk-{label}"
             if not os.path.exists(path):
                 os.makedirs(path)
-            initial_position = self.trajectory[rollout_case][0]
-            for i, coord in enumerate(self.trajectory[rollout_case]):
-                disp = np.linalg.norm(coord - initial_position, axis=1)
+            for i, coord in enumerate(self.trajectory[rollout_case[0]]):
                 pointsToVTK(f"{path}/points{i}",
                             np.array(coord[:, 0]),
                             np.array(coord[:, 1]),
                             np.zeros_like(coord[:, 1]) if self.dims == 2 else np.array(coord[:, 2]),
-                            data={"displacement": disp})
+                            data={"Velocity x": self.velocities_x[rollout_case[1]][i],
+                                  "Velocity y": self.velocities_y[rollout_case[1]][i]})
+                                  #"Velocity magnitude": .sqrt(self.velocities_x[rollout_case[1]][i]**2 + self.velocities_y[rollout_case[1]][i]**2)})
         print(f"vtk saved to: {self.output_dir}{self.output_name}...")
 
 
@@ -200,4 +221,3 @@ def main(_):
 
 if __name__ == '__main__':
     app.run(main)
-
