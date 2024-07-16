@@ -1,7 +1,6 @@
 import torch
 import numpy as np
 
-
 def load_npz_data(path):
 
     """
@@ -51,14 +50,13 @@ class SamplesDataset(torch.utils.data.Dataset):
 
     def __init__(self, path, input_length_sequence):
         super().__init__()
-
         # Data are loaded as list of tuples of the form (position, velocity, moved_particle).
         self._data = load_npz_data(path)
 
         #Length of each trajectory in the dataset excluding the input_length_sequence. May be variable between data
         self._dimension = self._data[0][0].shape[-1]
         self._input_length_sequence = input_length_sequence
-        self._data_lengths = [x.shape[0] - self._input_length_sequence for x, _, _,  in self._data]
+        self._data_lengths = [x.shape[0] - self._input_length_sequence for x, _, _, _, _, _, in self._data]
         self._length = sum(self._data_lengths)
 
         # Pre-compute cumulative lengths to allow fast indexing in __getitem__
@@ -100,23 +98,27 @@ class SamplesDataset(torch.utils.data.Dataset):
         position = np.transpose(position, (1, 0, 2))  # (nparticles, input_sequence_length, dimension)
         velocity = self._data[trajectory_idx][1][time_idx - self._input_length_sequence:time_idx]
         velocity = np.transpose(velocity, (1, 0, 2)) # (nparticles, input_sequence_length, dimension)
-        particle_move = np.transpose(self._data[trajectory_idx][2])
-        particle_move = particle_move[time_idx - self._input_length_sequence:time_idx]
-        particle_move = np.transpose(particle_move) # (nparticles, input_sequence_length)
+        n_cells = np.transpose(self._data[trajectory_idx][2])
+        n_cells = n_cells[time_idx]
+        cells = self._data[trajectory_idx][3][time_idx]
+        cells = cells[:n_cells, :]
+        free_surf = np.transpose(self._data[trajectory_idx][4][time_idx])
+        bound =  np.transpose(self._data[trajectory_idx][5])
+        #particle_move = np.transpose(particle_move) # (nparticles, input_sequence_length)
         n_particles_per_example = position.shape[0] # scalar
-        
+        n_cells_per_example = cells.shape[0]
         # Training label: next step velocity
         label = self._data[trajectory_idx][1][time_idx]
 
         # Training example: ((features), label)
-        training_example = ((position, velocity, particle_move, n_particles_per_example), label)
+        training_example = ((position, velocity, cells, free_surf, bound, n_particles_per_example, n_cells_per_example), label)
 
         return training_example
 
 def collate_fn(data):
 
     """
-    Collate function for SamplesDataset (used in torch.utils.data.DataLoader function).
+    Collate function for SamplesDataset.
 
     Args:
         data: List of tuples of numpy arrays of the form ((features), label).
@@ -129,23 +131,32 @@ def collate_fn(data):
  
     position_list = []
     velocity_list = []
-    particle_move_list = []
+    cells_list = []
     n_particles_per_example_list = []
+    n_cells_per_example_list = []
+    free_list = []
+    bound_list = []
     label_list = []
 
-    for ((positions, velocities, particle_move, n_particles_per_example), label) in data:
+    for ((positions, velocities, cells, free_surf, bound, n_particles_per_example, n_cells_per_example), label) in data:
         position_list.append(positions)
         velocity_list.append(velocities)
-        particle_move_list.append(particle_move)
+        cells_list.append(cells)
+        free_list.append(free_surf)
+        bound_list.append(bound)
         n_particles_per_example_list.append(n_particles_per_example)
+        n_cells_per_example_list.append(n_cells_per_example)
         label_list.append(label)
 
     collated_data = (
         (
             torch.tensor(np.vstack(position_list)).to(torch.float32).contiguous(),
             torch.tensor(np.vstack(velocity_list)).to(torch.float32).contiguous(),
-            torch.tensor(np.vstack(particle_move_list)).to(torch.bool).contiguous(),
+            torch.tensor(np.vstack(cells_list)).to(torch.int).contiguous(),
+            torch.tensor(np.vstack(free_list)).to(torch.bool).contiguous(),
+            torch.tensor(np.hstack(bound_list)).to(torch.bool).contiguous(),
             torch.tensor(n_particles_per_example_list).contiguous(),
+            torch.tensor(n_cells_per_example_list).contiguous(),
         ),
         torch.tensor(np.vstack(label_list)).to(torch.float32).contiguous()
     )
@@ -197,16 +208,18 @@ class TrajectoriesDataset(torch.utils.data.Dataset):
               trajectory = (position, velocity, particle_move, n_particles_per_example).
         """
 
-        position, velocity, particle_move = self._data[idx]
+        position, velocity, n_cells, cells, free_surf, bounds = self._data[idx]
         position = np.transpose(position, (1, 0, 2))
         velocity = np.transpose(velocity, (1, 0, 2))
-        particle_move = np.squeeze(particle_move)
         n_particles_per_example = position.shape[0]
 
         trajectory = (
             torch.tensor(position).to(torch.float32).contiguous(),
             torch.tensor(velocity).to(torch.float32).contiguous(),
-            torch.tensor(particle_move).to(torch.bool).contiguous(),
+            torch.tensor(cells).to(torch.int).contiguous(),
+            torch.tensor(bounds).to(torch.bool).contiguous(),
+            torch.tensor(free_surf).to(torch.bool).contiguous(),
+            torch.tensor(n_cells).to(torch.int).contiguous(),
             n_particles_per_example
         )
 
@@ -229,13 +242,13 @@ def get_data_loader_by_samples(path, input_length_sequence, batch_size, shuffle=
     """
 
     dataset = SamplesDataset(path, input_length_sequence)
-    return torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=shuffle,
+    return torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=16,
                                        pin_memory=True, collate_fn=collate_fn)
 
 
 def get_data_loader_by_trajectories(path):
     
-    """Returns a pytorch data loader for the valid/test dataset.
+    """Returns a data loader for the valid/test dataset.
 
     Args:
         path (str): Path to dataset.

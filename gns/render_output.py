@@ -58,7 +58,7 @@ class Render():
                 [output_data["initial_position"], output_data[output_case[0][0]]], axis=0
             )
             velocity_x[output_case[0][1]] = np.concatenate(
-                [output_data["initial_velocity"][:,:,0], output_data[output_case[0][1]][:,:,0]], axis=0
+                [output_data["initial_velocity"], output_data[output_case[0][1]]], axis=0
             )
             velocity_y[output_case[0][1]] = np.concatenate(
                 [output_data["initial_velocity"][:,:,1], output_data[output_case[0][1]][:,:,1]], axis=0
@@ -72,7 +72,7 @@ class Render():
         self.dims = trajectory[output_cases[0][0][0]].shape[2]
         self.num_particles = trajectory[output_cases[0][0][0]].shape[1]
         self.num_steps = trajectory[output_cases[0][0][0]].shape[0]
-        self.boundaries = output_data["metadata"]["bounds"]
+        self.boundaries = [[-1, 3], [-1, 2]]#output_data["metadata"]["bounds"]
 
     def render_gif_animation(
             self, point_size=1, timestep_stride=3, vertical_camera_angle=20, viewpoint_rotation=0.5, change_yz=False
@@ -143,20 +143,6 @@ class Render():
                         axes[j].set_ylim([float(yboundary[0]), float(yboundary[1])])
                         axes[j].set_zlim([float(zboundary[0]), float(zboundary[1])])
                         for mask, color in color_mask:ModuleNotFoundError: No module named 'pyevtk'
-(base) fedelant@mauricio:~/tesi/pfem-gns$ conda activate gns
-(gns) fedelant@mauricio:~/tesi/pfem-gns$ python3 -m gns.render_output --output_mode="vtk" --output_path="gns/outputs/big/" --output_file="test_ex0"
-vtk saved to: gns/outputs/big/test_ex0...
-(gns) fedelant@mauricio:~/tesi/pfem-gns$ 
-
-
-
-
-
-
-
-
-
-
                             axes[j].scatter(self.trajectory[datacase][i][mask, 0],
                                             self.trajectory[datacase][i][mask, 1],
                                             self.trajectory[datacase][i][mask, 2], s=point_size, color=color)
@@ -212,6 +198,23 @@ vtk saved to: gns/outputs/big/test_ex0...
                                   #"Velocity magnitude": .sqrt(self.velocity_x[output_case[1]][i]**2 + self.velocity_y[output_case[1]][i]**2)})
         print(f"vtk saved to: {self.output_dir}{self.output_name}...")
 
+    def write_txt(self):
+        """
+        Write `.txt` files for each timestep for each rollout case.
+        """
+        for output_case, label in self.output_cases:
+            path = f"{self.output_dir}{self.output_name}_txt-{label}"
+            if not os.path.exists(path):
+                os.makedirs(path)
+            for i, coord in enumerate(self.trajectory[output_case[0]]):
+                filename = f"{path}/points{i}.txt"
+                with open(filename, 'a') as file:
+                    file.write("POINTS\n")
+                    np.savetxt(file, coord, delimiter='\t', fmt='%.6f')
+                with open(filename, 'a') as file:
+                    file.write("VELOCITY\n")
+                    np.savetxt(file, self.velocity_x[output_case[1]][i], delimiter='\t', fmt='%.6f')
+        print(f"txt saved to: {self.output_dir}{self.output_name}...")
 
 def main(_):
     if not FLAGS.output_path:
@@ -230,9 +233,9 @@ def main(_):
             change_yz=FLAGS.change_yz
         )
     elif FLAGS.output_mode == "vtk":
-        render.write_vtk()
+        #render.write_vtk()
+        render.write_txt()
 
 
 if __name__ == '__main__':
     app.run(main)
-
