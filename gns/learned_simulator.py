@@ -20,6 +20,7 @@ class LearnedSimulator(nn.Module):
           dt: float,
           spatial_norm_weight: float,
           boundary_clamp_limit: float,
+          ar_freq: int,
           device="cuda"
   ):
     
@@ -48,6 +49,7 @@ class LearnedSimulator(nn.Module):
     self._normalization_stats = normalization_stats
     self._boundary_clamp_limit = boundary_clamp_limit
     self._spatial_norm_weight = spatial_norm_weight
+    self._ar_freq = ar_freq
     self.dt = dt
 
     # Initialize the EncodeProcessDecode
@@ -99,7 +101,8 @@ class LearnedSimulator(nn.Module):
           self,
           position: torch.tensor,
           bounds: torch.tensor,
-          free_surf: torch.tensor):
+          free_surf: torch.tensor,
+          step):
     
     """
     Generate graph edges using the PFEM mesh generator (FORTRAN bind)
@@ -122,7 +125,7 @@ class LearnedSimulator(nn.Module):
     np_bounds = bounds.cpu().detach().numpy()
 
     # Call the PFEM mesher
-    np_free_surf, cells, edges= mesh_gen.tassellation(np_pos, np_free_surf, np_bounds, cells, edges, np_pos.shape[0])
+    np_pos, np_free_surf, cells, edges= mesh_gen.tassellation(np_pos, np_free_surf, np_bounds, cells, edges, step, self._ar_freq, np_pos.shape[0])
 
     # Delete the useless rows
     cells = cells[~np.all(cells == 0, axis=1)]
@@ -141,7 +144,7 @@ class LearnedSimulator(nn.Module):
     free_surf = torch.from_numpy(np_free_surf).cuda(0)
     
     # The flow direction when using in combination with message passing is "source_to_target"
-    return torch.stack([senders, receivers]), cells, free_surf
+    return np_pos, torch.stack([senders, receivers]), cells, free_surf
 
   def _preprocessor(
           self,
@@ -178,7 +181,7 @@ class LearnedSimulator(nn.Module):
         [distance_to_lower_boundary, distance_to_upper_boundary], dim=1)
     normalized_clipped_distance_to_boundary = torch.clamp(
         distance_to_boundary / self._spatial_norm_weight,
-        0, self._boundary_clamp_limit)
+        -self._boundary_clamp_limit, self._boundary_clamp_limit)
     node_features.append(displacement_sequence.view(n_particles, -1))
     node_features.append(free_surf.view(n_particles,1))
     node_features.append(normalized_clipped_distance_to_boundary)
@@ -208,7 +211,8 @@ class LearnedSimulator(nn.Module):
           self,
           current_position: torch.tensor,
           bounds: torch.tensor,
-          free_surf: torch.tensor) -> torch.tensor:
+          free_surf: torch.tensor,
+          step) -> torch.tensor:
     
     """
     Predict position to evaluate the model based on position/velocity
@@ -226,7 +230,9 @@ class LearnedSimulator(nn.Module):
     """
     
     # Compute the graph connectivity using the PFEM mesher
-    edge_index, cells, free_surf = self._compute_graph_connectivity(current_position[:,-1], bounds, free_surf)
+    new_pos, edge_index, cells, free_surf = self._compute_graph_connectivity(current_position[:,-1], bounds, free_surf, step)
+    new_pos_torch = torch.from_numpy(new_pos).cuda(0)
+    current_position[:,-1] = new_pos_torch
 
     # Assign features to nodes and edges
     node_features, edge_features = self._preprocessor(

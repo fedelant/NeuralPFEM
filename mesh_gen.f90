@@ -1,8 +1,8 @@
 !!***********************************************  
-subroutine Tassellation(node_array, free_array, bound_array, out_array, edges, n_points)
+subroutine Tassellation(node_array, free_array, bound_array, out_array, edges, step, ar_freq, n_points)
 use fluid_module
 
-integer :: n_points, i1, j1, z1, index
+integer :: n_points, i1, j1, z1, index, step, ar_freq
 integer, dimension(n_points) :: free_array
 integer, dimension(n_points) :: bound_array
 real, dimension(n_points, 2) :: node_array
@@ -10,8 +10,11 @@ integer, dimension(n_points*3, 3) :: out_array
 integer, dimension(n_points*3*9, 2) :: edges
 
 !!f2py input-output declaration
+!f2py intent(in) steps
+!f2py intent(in) ar_freq
 !f2py intent(in) n_points
 !f2py intent(in) node_array
+!f2py intent(out) node_array
 !f2py intent(in) free_array
 !f2py intent(in) bound_array
 !f2py intent(out) free_array
@@ -33,6 +36,9 @@ call fill_struct(node_array, free_array, bound_array, n_points)
 call mesh_generation(npoints)
 
 call alpha_shape()
+if (mod(step,ar_freq) == 0) then
+    call AddRemNodesLocal()
+end if
 
 !!Fill output arrays
 out_array = 0
@@ -53,6 +59,8 @@ end do
 free_array = 0
 
 do i1=1,n_points
+    node_array(i1, 1) = node(i1)%coord(1)
+     node_array(i1,2) = node(i1)%coord(2) 
     if (node(i1)%free_surf == 1) then
         free_array(i1) = 1
     end if
@@ -928,9 +936,9 @@ subroutine fill_struct(node_array, free_array, bound_array, n)
   integer, dimension(n) :: bound_array
   
   alpha_surf = 2
-  alpha_inner = 5
-  alpha_bound = 2
-  alpha_gen =2
+  alpha_inner = 1.2
+  alpha_bound = 1.2
+  alpha_gen = 1.2
   
   npoints = n
   allocate(node(npoints))
@@ -2800,5 +2808,280 @@ subroutine insert ( k, lp, list, lptr, lnew )
 
   return
 end
+    
+subroutine AddRemNodesLocal
+use fluid_module
+use fluid_module_dt
+use solution_module
+use sediment_module
+implicit none
+
+integer :: i1, j1, n(3), k1, t1, remove,p1, elem_scelto,m1,check_addrem,count_nodes, add_counter,s1,q1, check_error, confirm, skip
+real(8) :: xc, yc, radius, gamma_min,area, l1,l2,l3, rad_in
+real(8) :: L(3), dL(3,2), jac,jac1,jac2,jac3
+real(8) :: xl, yl, x(3), y(3),ar, gamma_temp(3),Xg,Yg
+integer, allocatable :: nl(:), elem_concorr(:), elem_concorr_temp(:)
+real(8), allocatable :: dist(:) , move_nodes(:)
+
+area=0.d0
+elem_scelto=0
+area_m=0.d0
+check_addrem=0
+count_nodes=0
+add_counter=0
+allocate(move_nodes(npoints))
+move_nodes=0
+do i1=1,nelement
+    n(1)=elements(i1)%nodes(1)
+    n(2)=elements(i1)%nodes(2)
+    n(3)=elements(i1)%nodes(3)
+
+    call triangle_area(node(n(1))%coord(1),node(n(1))%coord(2),node(n(2))%coord(1), &
+    node(n(2))%coord(2),node(n(3))%coord(1),node(n(3))%coord(2),area)
+
+    area_m=area_m+area 
+end do
+area_m=area_m/nelement
+radius= sqrt(2*area_m)/2
+
+do k1=1,nelement
+    n=elements(k1)%nodes
+    
+    skip=0
+    if(node(n(1))%euler==1 .or. node(n(2))%euler==1 .or. node(n(3))%euler==1) then
+        skip=1
+    end if
+    
+    if (problem_type == 3) then
+        if(node(n(1))%bed==1 .or. node(n(2))%bed==1 .or. node(n(3))%bed==1) then
+            skip=1
+        end if
+    endif 
+    
+    
+    if (skip==0) then 
+        do i1=1,3
+            x(i1)=node(n(i1))%coord(1)
+            y(i1)=node(n(i1))%coord(2)
+        end do
+        call triangle_area(x(1),y(1),x(2),y(2),x(3),y(3),jac)
+        
+        l1= sqrt( (x(1)-x(2))**2+(y(1)-y(2))**2 )
+        l2= sqrt( (x(1)-x(3))**2+(y(1)-y(3))**2 )
+        l3= sqrt( (x(3)-x(2))**2+(y(3)-y(2))**2 )
+
+        rad_in=jac/(l1+l2+l3) 
+        if (2*rad_in<0.5d0*radius .or. 2*rad_in>1.5d0*radius)then
+            
+            if (l1<l3 .and. l2<l3 .and. node(n(1))%free_surf==0 .and. node(n(1))%bound==0 .and. node(n(1))%euler==0)then
+                
+                confirm=1
+                do i1=1,add_counter
+                    if(move_nodes(i1)==n(1))then
+                        confirm=0
+                    end if
+                end do
+                if(confirm==1)then
+                    add_counter=add_counter+1
+                    move_nodes(add_counter)=n(1)
+                end if
+           
+            elseif (l1<l2 .and. l3<l2 .and. node(n(2))%free_surf==0 .and. node(n(2))%bound==0.and. node(n(2))%euler==0)then
+                
+                confirm=1
+                do i1=1,add_counter
+                    if(move_nodes(i1)==n(2))then
+                        confirm=0
+                    end if
+                end do
+                
+                if(confirm==1)then
+                    add_counter=add_counter+1
+                    move_nodes(add_counter)=n(2)
+                end if
+            
+                
+            elseif (l2<l1 .and. l3<l1 .and. node(n(3))%free_surf==0 .and. node(n(3))%bound==0 .and. node(n(3))%euler==0)then
+                
+                confirm=1
+                do i1=1,add_counter
+                    if(move_nodes(i1)==n(3))then
+                        confirm=0
+                    end if
+                end do
+                
+                if(confirm==1)then
+                    add_counter=add_counter+1
+                    move_nodes(add_counter)=n(3)
+                end if
+                
+                elseif(node(n(1))%free_surf==0 .and. node(n(1))%bound==0 .and. node(n(1))%euler==0)then
+        
+                confirm=1
+                do i1=1,add_counter
+                    if(move_nodes(i1)==n(1))then
+                        confirm=0
+                    end if
+                end do
+                
+                if(confirm==1)then
+                    add_counter=add_counter+1
+                    move_nodes(add_counter)=n(1)
+                end if
+                
+                
+            elseif(node(n(2))%free_surf==0 .and. node(n(2))%bound==0 .and. node(n(2))%euler==0)then
+                                       
+                confirm=1
+                do i1=1,add_counter
+                    if(move_nodes(i1)==n(2))then
+                        confirm=0
+                    end if
+                end do
+                
+                if(confirm==1)then
+                    add_counter=add_counter+1
+                    move_nodes(add_counter)=n(2)  
+                end if  
+                
+                
+            elseif(node(n(3))%free_surf==0 .and. node(n(3))%bound==0 .and. node(n(3))%euler==0)then
+                
+                confirm=1
+                do i1=1,add_counter
+                    if(move_nodes(i1)==n(3))then
+                        confirm=0
+                    end if
+                end do
+                if(confirm==1)then
+                    add_counter=add_counter+1
+                    move_nodes(add_counter)=n(3)
+                end if
+                
+            end if
+        end if
+    end if
+end do
+     
+    
+do s1=1,add_counter
+    i1=move_nodes(s1) 
+    xc=node(i1)%coord(1)
+    yc=node(i1)%coord(2)
+    q1=node(i1)%neighb(1)                                         
+    allocate (nl(q1))  
+    check_error=0
+    do j1=2,q1+1           
+        nl(j1-1) = node(i1)%neighb(j1)
+        if(node(i1)%neighb(j1)<0)then
+            check_error=1
+            write(*,*)'Error'
+            pause
+        end if
+    end do
+    if(check_error==0)then
+        do j1=1,q1
+            xl=node(nl(j1))%coord(1)
+            yl=node(nl(j1))%coord(2) 
+        end do
+        check_addrem=1
+        count_nodes=count_nodes+1
+        elem_scelto=0                                                       
+        p1=0
+        
+        allocate(elem_concorr_temp(500))
+        elem_concorr_temp=0
+        do k1=1,nelement
+            do m1=1,3
+                if (elements(k1)%nodes(m1)==i1) then
+                    p1=p1+1     
+                    elem_concorr_temp(p1)=k1
+                end if
+            end do
+        end do
+        allocate(elem_concorr(p1))
+        do k1=1,p1
+            elem_concorr(k1)=elem_concorr_temp(k1)
+        end do
+        deallocate (elem_concorr_temp)
+        Xg=0.d0
+        Yg=0.d0
+        do k1=1,q1
+            Xg=Xg+(node(nl(k1))%coord(1))/q1
+            Yg=Yg+(node(nl(k1))%coord(2))/q1
+        end do
+        do  k1=1,p1
+            n=elements(elem_concorr(k1))%nodes
+            do j1=1,3
+                x(j1)=node(n(j1))%coord(1)
+                y(j1)=node(n(j1))%coord(2)
+            end do
+                 
+            call triangle_area(x(1),y(1),x(2),y(2),x(3),y(3),jac) 
+            call triangle_area(Xg,Yg,x(2),y(2),x(3),y(3),jac1)
+            call triangle_area(x(1),y(1),Xg,Yg,x(3),y(3),jac2)
+            call triangle_area(x(1),y(1),x(2),y(2),Xg,Yg,jac3)
+                 
+            if (jac1+jac2+jac3<=jac) then          
+                elem_scelto=elem_concorr(k1)        
+            end if
+        end do
+        if (elem_scelto==0)then
+            
+        else
+            n=elements(elem_scelto)%nodes
+            do j1=1,3
+                x(j1)=node(n(j1))%coord(1)
+                y(j1)=node(n(j1))%coord(2)
+            end do
+            call shape_function(x(1),y(1),x(2),y(2),x(3),y(3),Xg,Yg,L,dL)
+            
+            node(i1)%coord(1)=Xg
+            node(i1)%coord(2)=Yg
+            
+            
+        end if    
+        deallocate(elem_concorr)
+     end if
+     deallocate(nl)
+end do 
+
+    end subroutine AddRemNodesLocal
+    
+!!*********************************************** 
+subroutine shape_function(x1,y1,x2,y2,x3,y3,x,y,L,dL)
+
+!!------------------------------------------------------------------------------------------------
+!! Compute the value shape functions (L) and their derivatives (dL) for the element in point (x,y)
+!! Input variables : x1,y1,x2,y2,x3,y3,x,y
+!! Output variables: L,dL
+!!------------------------------------------------------------------------------------------------
+
+implicit none
+
+real(8) :: x1,y1,x2,y2,x3,y3,area,x,y
+real(8) :: area1,area2,area3,j,L(3),dL(3,2)
+
+call triangle_area(x1,y1,x2,y2,x3,y3,area)
+call triangle_area(x,y,x2,y2,x3,y3,area1)
+call triangle_area(x1,y1,x,y,x3,y3,area2)
+call triangle_area(x1,y1,x2,y2,x,y,area3)
+
+j=1/(2*area)
+
+L(1)=area1/area
+L(2)=area2/area
+L(3)=area3/area
+
+dL(1,1)=j*(y2-y3)
+dL(1,2)=-j*(x2-x3)
+dL(2,1)=-j*(y1-y3)
+dL(2,2)=j*(x1-x3)
+dL(3,1)=j*(y1-y2)
+dL(3,2)=j*(x2-x1)
+
+return
+end subroutine shape_function    
+!***********************************************************
     
     

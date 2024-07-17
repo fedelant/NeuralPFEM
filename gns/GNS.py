@@ -44,6 +44,7 @@ flags.DEFINE_integer('input_sequence_length', 6, help='Sequence length of previo
 flags.DEFINE_integer('nmessage_passing_steps', int(10), help='Number of message passing steps.')
 flags.DEFINE_float('spatial_norm_weight', 0.1, help='Weight used to normalize spatial features')
 flags.DEFINE_float('boundary_clamp_limit', 1.0, help='Boundary clamp limit.')
+flags.DEFINE_integer('ar_freq', 1000, help='AddRem frequence during prediction')
 
 # CUDA device 
 flags.DEFINE_integer("cuda_device_number", None, help="CUDA device (zero indexed), default is None so default CUDA device will be used.")
@@ -101,7 +102,8 @@ def predict_example(
         next_position, next_velocity, next_cells, free_surf = simulator.learned_update(
             current_position,
             bounds = bounds,
-            free_surf = free_surf)
+            free_surf = free_surf,
+            step = step)
         # Add the predicted next position and velocity to the trajectory vectors.
         predicted_position.append(torch.where(torch.stack((bounds, bounds), dim=1), initial_position[:,0], next_position))
         predicted_velocity.append(torch.where(torch.stack((bounds, bounds), dim=1), initial_velocity[:,0], next_velocity))
@@ -179,8 +181,10 @@ def predict(device: str):
       start_free_surf = free_surf[0, :]
       n_cells = features[5].to(device)
 
-      # Predict example rollout and evaluate example error loss
-      example_rollout, example_error = predict_example(simulator,
+      with torch.autocast(device_type="cuda", dtype=torch.float16):
+
+        # Predict example rollout and evaluate example error loss
+        example_rollout, example_error = predict_example(simulator,
                                                        position,
                                                        velocity,
                                                        cells,
@@ -454,6 +458,7 @@ def _get_simulator(
       dt = metadata["dt"],
       spatial_norm_weight=FLAGS.spatial_norm_weight,
       boundary_clamp_limit=FLAGS.boundary_clamp_limit,
+      ar_freq = FLAGS.ar_freq,
       device=device)
 
   return simulator
