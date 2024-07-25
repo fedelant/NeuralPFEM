@@ -52,9 +52,11 @@ class VTKwriter():
         trajectory = np.concatenate([output_data["initial_position"], output_data["predicted_position"]], axis=0)
         velocity = np.concatenate([output_data["initial_velocity"], output_data["predicted_velocity"]], axis=0)
         cells = output_data["predicted_cells"]
+        free_surf = output_data["predicted_free_surf"]
         self.trajectory = trajectory
         self.velocity = velocity
         self.cells = cells
+        self.free_surf = free_surf
 
         # Trajectory information.
         self.dims = trajectory.shape[2]
@@ -95,6 +97,12 @@ class VTKwriter():
                 file.write("VECTORS Velocity float\n")
                 vel=np.hstack((self.velocity[i], (np.full((self.velocity[i].shape[0],1),0))))
                 np.savetxt(file, vel, delimiter='\t', fmt='%.6f')
+                # Write velocity
+                file.write(f"SCALARS FreeSurf float \n")     
+                file.write("LOOKUP_TABLE default\n")
+                print(i)
+                free_surf=self.free_surf[i]
+                np.savetxt(file, free_surf, delimiter='\t', fmt='%.6f')
 
         print(f"vtk saved to: {self.output_dir}{self.output_name}...")
 

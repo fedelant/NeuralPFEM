@@ -6,6 +6,7 @@ import re
 import sys
 import numpy as np
 import torch
+from pytorch3d.loss import chamfer_distance
 from torch.cuda.amp import autocast, GradScaler
 from tqdm import tqdm
 from absl import flags
@@ -14,6 +15,8 @@ from absl import app
 from gns import learned_simulator
 from gns import noise_utils
 from gns import data_loader
+
+import time
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
@@ -93,21 +96,28 @@ def predict_example(
     predicted_position = []
     predicted_velocity = []
     predicted_cells = []
+    predicted_free_surf = []
     for step in range(FLAGS.input_sequence_length):
         predicted_cells.append(cells[step, :n_cells[step], :].cpu().detach().numpy())
+        predicted_free_surf.append(free_surf[step, :].cpu().detach().numpy())
+    free_surf = free_surf[-1, :]
+    free_surf[bounds==1] = 0
 
     # Cycle over the number of time steps I want to predict.
     for step in tqdm(range(nsteps), total=nsteps):
         # Get next position and velocity, each with shape (nnodes, dim), with learned simulator
-        next_position, next_velocity, next_cells, free_surf = simulator.learned_update(
+        next_position, current_position[:,-1], current_velocity[:,-1], next_velocity, next_cells, free_surf = simulator.learned_update(
             current_position,
+            current_velocity,
             bounds = bounds,
             free_surf = free_surf,
             step = step)
         # Add the predicted next position and velocity to the trajectory vectors.
+        free_surf[bounds==1] = 0
         predicted_position.append(torch.where(torch.stack((bounds, bounds), dim=1), initial_position[:,0], next_position))
         predicted_velocity.append(torch.where(torch.stack((bounds, bounds), dim=1), initial_velocity[:,0], next_velocity))
         predicted_cells.append(next_cells)
+        predicted_free_surf.append(free_surf.cpu().numpy())
 
         # Shift current_position/velocity, removing the oldest position in the sequence and appending the next position at the end.
         current_position = torch.cat(
@@ -122,6 +132,7 @@ def predict_example(
     # Compute the error between the simulated trajectory and the predicted one.
     # TO DO: find the best way to evaluate test error
     example_error = (predicted_position - ground_truth_position) ** 2
+    example_error2 = chamfer_distance(predicted_position, ground_truth_position) 
 
     # Output data structure
     output_dict = {
@@ -130,11 +141,12 @@ def predict_example(
         'predicted_position': predicted_position.cpu().numpy(),
         'predicted_velocity': predicted_velocity.cpu().numpy(),
         'predicted_cells': predicted_cells,
+        'predicted_free_surf': predicted_free_surf,
         'ground_truth_position': ground_truth_position.cpu().numpy(),
         'ground_truth_velocity': ground_truth_velocity.cpu().numpy()
     }
 
-    return output_dict, example_error
+    return output_dict, example_error, example_error2[0]
 
 
 def predict(device: str):
@@ -167,6 +179,7 @@ def predict(device: str):
 
   # Loop over the examples in the dataset
   error = []
+  error2 = []
   with torch.no_grad(): # TO DO: understand
     for example_i, features in enumerate(ds):
       nsteps = metadata['sequence_length'] - FLAGS.input_sequence_length
@@ -178,13 +191,13 @@ def predict(device: str):
       bounds = features[3].to(device)
       free_surf = features[4].to(device)
       free_surf = np.squeeze(free_surf)
-      start_free_surf = free_surf[0, :]
+      start_free_surf = free_surf[0:FLAGS.input_sequence_length, :]
       n_cells = features[5].to(device)
 
       with torch.autocast(device_type="cuda", dtype=torch.float16):
 
         # Predict example rollout and evaluate example error loss
-        example_rollout, example_error = predict_example(simulator,
+        example_rollout, example_error, example_error2 = predict_example(simulator,
                                                        position,
                                                        velocity,
                                                        cells,
@@ -195,9 +208,11 @@ def predict(device: str):
 
       # Print information
       print("Predicting example {} error: {}".format(example_i, example_error.mean()))
+      print("Predicting example {} error: {}".format(example_i, example_error2))
 
       # Save example error
       error.append(torch.flatten(example_error))
+      error2.append(example_error2)
 
       # Save predicted trajectory during test 
       if FLAGS.mode == 'test':
@@ -209,7 +224,7 @@ def predict(device: str):
           pickle.dump(example_rollout, f)
 
   print("Mean error prediction dataset: {}".format(torch.mean(torch.cat(error))))
-  
+  print("Mean error prediction dataset: {}".format(torch.mean(torch.stack(error2))))
   # Uncomment the following lines when, in the validation process, you are interested
   # in running this code for every model generated during training keeping track of the 
   # error history to find the best one and to evaluate the training process
@@ -217,7 +232,7 @@ def predict(device: str):
   if FLAGS.mode == 'valid':
     with open("loss.txt", "a+") as file:
       file.seek(0)
-      file.write(str(torch.mean(torch.cat(error)).detach().cpu().numpy()))
+      file.write(str(torch.mean(torch.stack(error2)).detach().cpu().numpy()))
       file.write("\n")
 
 
@@ -257,6 +272,7 @@ def train(rank, world_size, device):
       metadata = json.loads(fp.read())
   # Get simulator and optimizer
   simulator = _get_simulator(metadata, device)
+  #optimizer = torch.optim.RMSprop(simulator.parameters(), lr=FLAGS.lr_init*world_size)
   optimizer = torch.optim.Adam(simulator.parameters(), lr=FLAGS.lr_init*world_size)
   # Initialize the step indices
   step = 0
@@ -289,7 +305,12 @@ def train(rank, world_size, device):
     simulator.parameters())
     optimizer.load_state_dict(train_state["optimizer_state"])
     optimizer_to(optimizer, device_id)
-
+    '''
+    optimizer = torch.optim.RMSprop(
+    simulator.parameters())
+    optimizer.load_state_dict(train_state["optimizer_state"])
+    optimizer_to(optimizer, device_id)
+    '''
     # Update the step index
     step = train_state["global_train_state"].pop("step")
 
@@ -327,7 +348,6 @@ def train(rank, world_size, device):
           continue
         labels = example[1].to(device_id)
         n_particles_per_example.to(device_id)
-
         # Sample the noise to add to the inputs to the model during training
         # TO DO: capire errore migliore, valore, applicato a position o velocity...
         sampled_pos_noise, sampled_vel_noise = noise_utils.get_random_walk_noise_for_position_and_velocity_sequence(
@@ -336,11 +356,11 @@ def train(rank, world_size, device):
         sampled_vel_noise = sampled_vel_noise.to(device_id)
         sampled_pos_noise[bounds==1] = 0 
         sampled_vel_noise[bounds==1] = 0 
-        
-        noisy_position = position + sampled_pos_noise
+
+        noisy_position = position #+ sampled_pos_noise
+        noisy_velocity = velocity + sampled_vel_noise
 
         optimizer.zero_grad()
-        
         #with torch.autocast(device_type="cuda"):
         with torch.autocast(device_type="cuda", dtype=torch.float16):
 
@@ -349,38 +369,38 @@ def train(rank, world_size, device):
             pred_vel, target_vel = simulator.predict_velocity(
                 next_velocity=labels,
                 position_sequence=noisy_position,
+                velocity_sequence=noisy_velocity,
                 edges=edges,
                 free_surf=free_surf,
                 bounds=bounds,
                 n_particles_per_example=n_particles_per_example,
                 n_edges_per_example=n_edges_per_example
             )
-
             # Calculate the loss (the mean of the velocity error over all the particles TO DO funzione
-            pred_vel = pred_vel#[~bounds] TO DO provare
-            target_vel = target_vel#[~bounds]
+            #pred_vel = pred_vel#[~bounds] TO DO provare
+            #target_vel = target_vel#[~bounds]
             loss = (pred_vel - target_vel) ** 2
             #mean_abs_vel = torch.mean(torch.abs(target_vel))
             #loss = loss / (mean_abs_vel ** 2) TO DO provare
             loss = loss.sum(dim=-1)
             loss = loss.sum() / target_vel.shape[0]
         
-            train_loss = loss.item()
-            epoch_train_loss += train_loss
+            epoch_train_loss += loss
         
         # Computes the gradient of loss
         #loss.backward()
         #optimizer.step()
-        scaler.scale(loss).backward() 
+        
+        scaler.scale(loss).backward()         
         scaler.step(optimizer)
         scaler.update()
-
         # Update learning rate
-        lr_new = FLAGS.lr_init  * (FLAGS.lr_decay ** (step/FLAGS.lr_decay_steps)) * world_size
+        lr_new = FLAGS.lr_init  #* (FLAGS.lr_decay ** (step/FLAGS.lr_decay_steps))
+
         for param in optimizer.param_groups:
           param['lr'] = lr_new
 
-        print(f'Training step: {step}/{FLAGS.ntraining_steps}. Loss: {train_loss}.')
+        print(f'Training step: {step}/{FLAGS.ntraining_steps}. Loss: {loss}.')
         # Save model state
         if step % FLAGS.nsave_steps == 0:
             simulator.save(FLAGS.model_path  + 'model-'+str(step)+'.pt')

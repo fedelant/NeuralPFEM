@@ -1,11 +1,11 @@
 !!***********************************************  
-subroutine Tassellation(node_array, free_array, bound_array, out_array, edges, step, ar_freq, n_points)
+subroutine Tassellation(node_array, vel_array, free_array, bound_array, out_array, edges, step, ar_freq, n_points)
 use fluid_module
 
 integer :: n_points, i1, j1, z1, index, step, ar_freq
 integer, dimension(n_points) :: free_array
 integer, dimension(n_points) :: bound_array
-real, dimension(n_points, 2) :: node_array
+real, dimension(n_points, 2) :: node_array, vel_array
 integer, dimension(n_points*3, 3) :: out_array
 integer, dimension(n_points*3*9, 2) :: edges
 
@@ -15,6 +15,8 @@ integer, dimension(n_points*3*9, 2) :: edges
 !f2py intent(in) n_points
 !f2py intent(in) node_array
 !f2py intent(out) node_array
+!f2py intent(in) vel_array
+!f2py intent(out) vel_array
 !f2py intent(in) free_array
 !f2py intent(in) bound_array
 !f2py intent(out) free_array
@@ -30,7 +32,7 @@ integer, dimension(n_points*3*9, 2) :: edges
 !!----------------------------------------------
 
 !!Fill data structures with array input data
-call fill_struct(node_array, free_array, bound_array, n_points)
+call fill_struct(node_array, vel_array, free_array, bound_array, n_points)
 
 !!The Delaunay triangulation
 call mesh_generation(npoints)
@@ -49,9 +51,12 @@ do i1=1,size(elem_array) / 3
     out_array(i1, 3) = elem_array(i1, 3) -1
     do j1=1,3
        do z1=1,3
+        !!if (j1/=z1 .and. (node(out_array(i1, j1) + 1)%bound /= 1 &
+          !!  .or. node(out_array(i1, z1) + 1)%bound /= 1)) then
           edges(index, 1) = out_array(i1, j1) 
           edges(index, 2) = out_array(i1, z1) 
           index = index + 1
+        !!end if
        end do
     end do
 end do
@@ -60,7 +65,9 @@ free_array = 0
 
 do i1=1,n_points
     node_array(i1, 1) = node(i1)%coord(1)
-     node_array(i1,2) = node(i1)%coord(2) 
+    node_array(i1,2) = node(i1)%coord(2) 
+    vel_array(i1, 1) = unn(2*i1-1)
+    vel_array(i1, 2) = unn(2*i1)
     if (node(i1)%free_surf == 1) then
         free_array(i1) = 1
     end if
@@ -68,6 +75,7 @@ end do
 
 !!Deallocate data structures
 deallocate(node)
+deallocate(unn)
 deallocate(elem_array)
 deallocate(elements)
 return
@@ -133,8 +141,8 @@ subroutine mesh_generation(n)
 
   !!Assign the coordinates of the mesh nodes 
   do i1=1,n
-     x(i1)=node(i1)%coord(1)*100
-     y(i1)=node(i1)%coord(2)*100
+     x(i1)=node(i1)%coord(1)*1000
+     y(i1)=node(i1)%coord(2)*1000
   end do
 
   
@@ -926,12 +934,12 @@ area=abs((x1-x3)*(y2-y3)-(x2-x3)*(y1-y3))/2
 return
 end subroutine triangle_area
 
-subroutine fill_struct(node_array, free_array, bound_array, n)
+subroutine fill_struct(node_array, vel_array, free_array, bound_array, n)
 !
   use fluid_module
   
   integer :: n
-  real, dimension(n, 2) :: node_array
+  real, dimension(n, 2) :: node_array, vel_array
   integer, dimension(n) :: free_array
   integer, dimension(n) :: bound_array
   
@@ -942,6 +950,7 @@ subroutine fill_struct(node_array, free_array, bound_array, n)
   
   npoints = n
   allocate(node(npoints))
+  allocate(unn(2*npoints))
   
   do i = 1,n
     node(i)%number = i
@@ -952,6 +961,8 @@ subroutine fill_struct(node_array, free_array, bound_array, n)
     if (bound_array(i) == 0 .and. free_array(i) == 0) then
         node(i)%int = 1
     end if
+    unn(2*i-1)=vel_array(i,1)
+    unn(2*i)=vel_array(i,2)
   end do
   
   return
@@ -3039,6 +3050,8 @@ do s1=1,add_counter
             node(i1)%coord(1)=Xg
             node(i1)%coord(2)=Yg
             
+            unn(2*i1-1) = L(1)*unn(2*n(1)-1)+L(2)*unn(2*n(2)-1)+L(3)*unn(2*n(3)-1)
+            unn(2*i1)   = L(1)*unn(2*n(1))+L(2)*unn(2*n(2))+L(3)*unn(2*n(3))
             
         end if    
         deallocate(elem_concorr)

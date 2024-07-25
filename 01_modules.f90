@@ -101,7 +101,7 @@ real(8) :: total_AddRem_time = 0.d0
 integer :: n_rows_data_set, row_count = 1
 integer, parameter :: benchmark = 0
 real(8) , allocatable :: x_data_set(:), y_data_set(:), diff(:)
-
+real(8), allocatable :: unn(:)
 !!STRUCTURE DATA 
 
 type Snode
@@ -208,7 +208,7 @@ module solution_module
 !!solution variables
 !!-------------------------------------------------------------------
 
-real(8), allocatable :: unn(:), p(:), f(:), p_m(:)
+real(8), allocatable :: p(:), f(:), p_m(:)
 real(8), allocatable :: rhonn(:)
 real(8), allocatable :: ff0(:),  epsylon(:,:)
 

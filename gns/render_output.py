@@ -72,7 +72,7 @@ class Render():
         self.dims = trajectory[output_cases[0][0][0]].shape[2]
         self.num_particles = trajectory[output_cases[0][0][0]].shape[1]
         self.num_steps = trajectory[output_cases[0][0][0]].shape[0]
-        self.boundaries = [[-1, 3], [-1, 2]]#output_data["metadata"]["bounds"]
+        self.boundaries = [[-1,3],[-1, 2]]#output_data["metadata"]["bounds"]
 
     def render_gif_animation(
             self, point_size=1, timestep_stride=3, vertical_camera_angle=20, viewpoint_rotation=0.5, change_yz=False
