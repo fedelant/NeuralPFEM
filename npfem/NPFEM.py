@@ -23,6 +23,9 @@ from npfem import distribute
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
+# Save command line options
+FLAGS = flags.FLAGS
+
 # Code mode definition
 flags.DEFINE_enum('mode', 'train', ['train', 'valid', 'test'], help='Train, Validate or Test the model. Train is the default mode.')
 
@@ -57,10 +60,6 @@ flags.DEFINE_integer('lr_decay_steps', int(1e6), help='Learning rate decay steps
 
 # CUDA device 
 flags.DEFINE_integer("cuda_device_number", None, help="CUDA device (zero indexed), default is None so default CUDA device will be used.")
-
-# Save command line options
-FLAGS = flags.FLAGS
-FLAGS(sys.argv)
 
 def predict_example(
     simulator: learned_simulator.LearnedSimulator,
@@ -501,7 +500,7 @@ def _get_simulator(
   return simulator
 
 
-def main(_):
+def main(argv):
 
   """Train or evaluate the model.
   """
