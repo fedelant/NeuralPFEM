@@ -1,9 +1,13 @@
+import numpy as np
+import sys
+from typing import Dict
+
 import torch
 import torch.nn as nn
-import numpy as np
-from gns import graph_network
-from typing import Dict
+
+from npfem import graph_network
 import mesh_gen
+
 
 class LearnedSimulator(nn.Module):
   
@@ -12,13 +16,14 @@ class LearnedSimulator(nn.Module):
           nnode_in: int,
           nedge_in: int,
           latent_dim: int,
-          nmessage_passing_steps: int,
+          n_message_passing_steps: int,
           nmlp_layers: int,
           mlp_hidden_dim: int,
           boundary: torch.tensor,
           normalization_stats: dict,
-          dt: float,
-          spatial_norm_weight: float,
+          dt: float,          
+          h: float,
+          velocity_scale_weight: float,
           boundary_clamp_limit: float,
           ar_freq: int,
           device="cuda"
@@ -31,7 +36,7 @@ class LearnedSimulator(nn.Module):
       nnode_in: number of node features inputs
       nedge_in: number of edge features inputs
       latent_dim: dimension of latent node/edge data
-      nmessage_passing_steps: number of message passing steps
+      n_message_passing_steps: number of message passing steps
       nmlp_layers: number of hidden layers in the MLP 
       boundaries: Array of 2-tuples, containing the lower and upper boundaries
         of the cuboid containing the particles TO DO
@@ -47,20 +52,23 @@ class LearnedSimulator(nn.Module):
     super(LearnedSimulator, self).__init__()
     self._boundary = boundary.to(device)
     self._normalization_stats = normalization_stats
-    self._boundary_clamp_limit = boundary_clamp_limit
-    self._spatial_norm_weight = spatial_norm_weight
-    self._ar_freq = ar_freq
+    self._velocity_scale_weight = velocity_scale_weight
+    self._h = h
     self.dt = dt
+
+    self._ar_freq = ar_freq
+
+    self._boundary_clamp_limit = boundary_clamp_limit
 
     # Initialize the EncodeProcessDecode
     self._encode_process_decode = graph_network.EncodeProcessDecode(
         nnode_in_features=nnode_in,
-        nnode_out_features=2, #2D
+        nnode_out_features=2, #2D TO DO extend to 3D
         nedge_in_features=nedge_in,
         latent_dim=latent_dim,
-        nmessage_passing_steps=nmessage_passing_steps,
+        nmessage_passing_steps=n_message_passing_steps,
         nmlp_layers=nmlp_layers,
-        mlp_hidden_dim=mlp_hidden_dim).to(device)
+        mlp_hidden_dim=mlp_hidden_dim)
 
     self._device = device
 
@@ -90,7 +98,7 @@ class LearnedSimulator(nn.Module):
     for j in range(n_particles_per_example.shape[0]-1):
         n_cum_edges += n_edges_per_example[j]
         edges[n_cum_edges:] += n_particles_per_example[j]
-    
+
     senders = edges[:,0].long()
     receivers = edges[:,1].long()
 
@@ -125,7 +133,8 @@ class LearnedSimulator(nn.Module):
     np_vel = velocity.cpu().detach().numpy()
     np_free_surf = free_surf.cpu().detach().numpy()
     np_bounds = bounds.cpu().detach().numpy()
-  
+    bound_cumsum=np_bounds.cumsum()
+
     # Call the PFEM mesher
     np_pos, np_vel, np_free_surf, cells, edges= mesh_gen.tassellation(np_pos, np_vel, np_free_surf, np_bounds, cells, edges, step, self._ar_freq, np_pos.shape[0])
   
@@ -136,12 +145,18 @@ class LearnedSimulator(nn.Module):
     # Delete repeated edges
     np_edges = np.unique(edges, axis=0)
     np_edges = np_edges.astype(np.int64)
+    np_edges2 = np.array(np_edges)
+
+    for i in range(np_edges.shape[0]):
+          np_edges2[i,0]=np_edges[i,0]-bound_cumsum[np_edges[i,0]]
+          np_edges2[i,1]=np_edges[i,1]-bound_cumsum[np_edges[i,1]]
+    
     # TO DO verificare cosa meglio
     #senders = torch.tensor(np_edges[:,0], device=torch.device('cuda'))
     #receivers = torch.tensor(np_edges[:,1], device=torch.device('cuda'))
     #free_surf = torch.tensor(np_free_surf, device=torch.device('cuda'))
-    senders = torch.from_numpy(np_edges[:,0]).cuda(0)
-    receivers = torch.from_numpy(np_edges[:,1]).cuda(0)
+    senders = torch.from_numpy(np_edges2[:,0]).cuda(0)
+    receivers = torch.from_numpy(np_edges2[:,1]).cuda(0)
     free_surf = torch.from_numpy(np_free_surf).cuda(0)
     
     # The flow direction when using in combination with message passing is "source_to_target"
@@ -149,11 +164,11 @@ class LearnedSimulator(nn.Module):
 
   def _preprocessor(
           self,
-          position_sequence: torch.tensor,
+          current_position: torch.tensor,
           velocity_sequence: torch.tensor,
           bounds: torch.tensor,
-          free_surf: torch.tensor,
           edge_index: torch.tensor):
+          #free_surf: torch.tensor,
     
     """
     Extracts features used for training and predictions.
@@ -164,50 +179,48 @@ class LearnedSimulator(nn.Module):
       
       nparticles_per_example: Number of particles per example. Default is 2 examples per batch.
     """
+    
+    n_particles = current_position.shape[0]
 
     # Initialize node features
     node_features = []
 
-    n_particles = position_sequence.shape[0]
-    most_recent_position = position_sequence[:, -1]
-    displacement_sequence = displacement(position_sequence)
-    # Normalized clipped distances to lower and upper boundaries.
-    # boundaries are an array of shape [num_dimensions, 2], where the second
-    # axis, provides the lower/upper boundaries.
+    # Normalized clipped distances to lower-left and upper-right boundaries (BCs)
+    boundary = self._boundary.clone().detach().requires_grad_(False).to(self._device)
     distance_to_lower_boundary = torch.abs(
-        most_recent_position - self._boundary[:, 0][None])
+        current_position - boundary[:, 0][None])
     distance_to_upper_boundary = torch.abs(
-        self._boundary[:, 1][None] - most_recent_position)
+        boundary[:, 1][None] - current_position)
     distance_to_boundary = torch.cat(
         [distance_to_lower_boundary, distance_to_upper_boundary], dim=1)
     normalized_clipped_distance_to_boundary = torch.clamp(
-        distance_to_boundary / self._spatial_norm_weight,
+        distance_to_boundary / self._h,
         -self._boundary_clamp_limit, self._boundary_clamp_limit)
-    weigh_vel_sequence = 0.01 * velocity_sequence[:, 1:, :]
-    #weigh_vel_sequence = (velocity_sequence[:, 1:, :] - self._normalization_stats['mean']) / self._normalization_stats['std']
-
-    #node_features.append(displacement_sequence.view(n_particles, -1))
-    node_features.append(weigh_vel_sequence.view(n_particles, -1))
-    node_features.append(free_surf.view(n_particles,1))
+    
+    # Scaling velocity input sequence with a weight
+    velocity_sequence = velocity_sequence * self._velocity_scale_weight
+    
+    node_features.append(velocity_sequence.view(n_particles, -1))
     node_features.append(normalized_clipped_distance_to_boundary)
-    #node_features.append(bounds.view(n_particles,1))
+    #node_features.append(free_surf.view(n_particles,1)) TO DO free surf
     
     # Initialize edge features.
     edge_features = []
 
     # Relative displacement and distances normalized to radius with shape (n_edges, 2)
     normalized_relative_displacements = (
-        most_recent_position[edge_index[0], :] -
-        most_recent_position[edge_index[1], :]
-    ) / self._spatial_norm_weight
-    
+        current_position[edge_index[0], :] -
+        current_position[edge_index[1], :]
+    )  / self._h
+
     # Relative distance between 2 particles with shape (n_edges, 1)
     normalized_relative_distances = torch.norm(
         normalized_relative_displacements, dim=-1, keepdim=True)
-    
+
     # Edge features has a final shape of (n_edges, 3)
     edge_features.append(normalized_relative_displacements)
     edge_features.append(normalized_relative_distances)
+
     return (torch.cat(node_features, dim=-1),
             torch.cat(edge_features, dim=-1))
 
@@ -235,16 +248,16 @@ class LearnedSimulator(nn.Module):
     """
     
     # Compute the graph connectivity using the PFEM mesher
-    new_pos, new_vel, edge_index, cells, free_surf = self._compute_graph_connectivity(current_position[:,-1], current_velocity[:,-1], bounds, free_surf, step)
+    new_pos, new_vel, edge_index, cells, free_surf = self._compute_graph_connectivity(current_position, current_velocity[:,-1], bounds, free_surf, step)
     new_pos_torch = torch.from_numpy(new_pos).cuda(0)
-    current_position[:,-1] = new_pos_torch
+    current_position = new_pos_torch
     new_vel_torch = torch.from_numpy(new_vel).cuda(0)
     current_velocity[:,-1] = new_vel_torch
 
     # Assign features to nodes and edges
     node_features, edge_features = self._preprocessor(
-            current_position, current_velocity, bounds, free_surf, edge_index)
-
+            current_position[bounds==0], current_velocity[bounds==0], bounds, edge_index)
+    
     predicted_normalized_velocity = self._encode_process_decode(
         node_features, edge_index, edge_features)
 
@@ -252,23 +265,30 @@ class LearnedSimulator(nn.Module):
         predicted_normalized_velocity * self._normalization_stats['std']
     ) + self._normalization_stats['mean']
 
-    zero_tensor = torch.zeros_like(predicted_velocity)
-    predicted_velocity = torch.where(torch.stack((bounds, bounds), dim=1), zero_tensor, predicted_velocity)
+    # Initialize the new tensor with zeros
+    zero_tensor = torch.zeros_like(current_velocity[:,-1])
+
+    # Indexes in the new tensor to place original tensor values
+    original_tensor_indices = torch.nonzero(~bounds, as_tuple=False).squeeze()
+
+    # Fill in the new tensor with original tensor values at appropriate positions
+    zero_tensor[original_tensor_indices] = predicted_velocity
     
-    predicted_position = current_position[:, -1] + predicted_velocity * self.dt 
+    #predicted_velocity = torch.where(torch.stack((bounds, bounds), dim=1), zero_tensor, predicted_velocity)
     
-    return predicted_position, new_pos_torch, new_vel_torch, predicted_velocity, cells, free_surf
+    predicted_position = current_position + zero_tensor * self.dt 
+    return predicted_position, new_pos_torch, new_vel_torch, zero_tensor, cells, free_surf
 
   def predict_velocity(
           self,
           next_velocity: torch.tensor,
-          position_sequence: torch.tensor,
+          current_position: torch.tensor,
           velocity_sequence: torch.tensor,
           edges:torch.tensor,
-          free_surf:torch.tensor,
           bounds:torch.tensor,
           n_particles_per_example: torch.tensor,
           n_edges_per_example: torch.tensor):
+          #free_surf:torch.tensor,
     
     """
     Predict velocity to train the model based on
@@ -295,17 +315,15 @@ class LearnedSimulator(nn.Module):
 
     # Adjust the edge indices depending on the batch dimension
     edge_index = self._adjust_graph_edges(edges, n_particles_per_example, n_edges_per_example)
-    
+    #print(edge_index.shape)
+
     # Assign features to nodes and edges
-    node_features, edge_features = self._preprocessor(position_sequence, velocity_sequence, bounds, free_surf, edge_index)
+    node_features, edge_features = self._preprocessor(current_position, velocity_sequence, bounds, edge_index)
 
-    # Perform the forward pass with the noisy position sequence
-    predicted_normalized_velocity = self._encode_process_decode(
-        node_features, edge_index, edge_features)
-
+    # Perform the forward pass with the GNN model
+    predicted_normalized_velocity = self._encode_process_decode(node_features, edge_index, edge_features)
+    
     # Calculate the target normalized velocity
-    # TO DO: check se meglio noisy o no
-    #next_velocity_adjusted = next_velocities + velocity_sequence_noise[:, -1]
     target_normalized_velocity = (next_velocity - self._normalization_stats['mean']) / self._normalization_stats['std']
     
     return predicted_normalized_velocity, target_normalized_velocity
@@ -329,15 +347,3 @@ class LearnedSimulator(nn.Module):
       path: Model path
     """
     self.load_state_dict(torch.load(path, map_location=torch.device('cpu')))
-
-def displacement(
-        position_sequence: torch.tensor) -> torch.tensor:
-  """Finite difference between two input position sequence
-
-  Arg:
-    position_sequence: Input position sequence of shape(nparticles, input_sequence_length, dim)
-
-  Returns:
-    torch.tensor: Output displacements sequence of shape(nparticles, input_sequence_length-1, dim)
-  """
-  return position_sequence[:, 1:] - position_sequence[:, :-1]

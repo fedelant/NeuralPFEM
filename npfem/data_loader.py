@@ -27,7 +27,7 @@ def load_npz_data(path):
 class SamplesDataset(torch.utils.data.Dataset):
 
     """
-    Dataset of samples of trajectories used for training.
+    Dataset of sampled trajectories used for training.
     
     Each sample is a tuple of the form (position, velocity, moved_particle).
     position is a numpy array of shape (sequence_length, n_particles, dimension).
@@ -37,26 +37,26 @@ class SamplesDataset(torch.utils.data.Dataset):
 
     Args:
         path (str): Path to dataset.
-        input_length_sequence (int): Length of input sequence.
+        input_velocity_steps (int): Length of input sequence.
 
     Attributes:
         _data (list): List of tuples of the form (position, velocity, particle_move).
         _dimension (int): Dimension of the data.
-        _input_length_sequence (int): Length of input sequence.
+        _input_velocity_steps (int): Length of input sequence.
         _data_lengths (list): List of lengths of trajectories in the dataset.
         _length (int): Total number of samples in the dataset.
         _precompute_cumlengths (np.array): Precomputed cumulative lengths of trajectories in the dataset.
     """
 
-    def __init__(self, path, input_length_sequence):
+    def __init__(self, path, input_velocity_steps):
         super().__init__()
         # Data are loaded as list of tuples of the form (position, velocity, moved_particle).
         self._data = load_npz_data(path)
 
-        #Length of each trajectory in the dataset excluding the input_length_sequence. May be variable between data
+        #Length of each trajectory in the dataset excluding the input_velocity_steps. May be variable between data
         self._dimension = self._data[0][0].shape[-1]
-        self._input_length_sequence = input_length_sequence
-        self._data_lengths = [x.shape[0] - self._input_length_sequence for x, _, _, _, _, _, in self._data]
+        self._input_velocity_steps = input_velocity_steps
+        self._data_lengths = [x.shape[0] - self._input_velocity_steps for x, _, _, _, _, _, in self._data]
         self._length = sum(self._data_lengths)
 
         # Pre-compute cumulative lengths to allow fast indexing in __getitem__
@@ -91,22 +91,24 @@ class SamplesDataset(torch.utils.data.Dataset):
 
         # Compute index of pick along time-dimension of trajectory.
         start_of_selected_trajectory = self._precompute_cumlengths[trajectory_idx - 1] if trajectory_idx != 0 else 0
-        time_idx = self._input_length_sequence + (idx - start_of_selected_trajectory)
+        time_idx = self._input_velocity_steps + (idx - start_of_selected_trajectory)
 
         # Prepare training features with the rigth shape.
-        position = self._data[trajectory_idx][0][time_idx - self._input_length_sequence:time_idx]
-        position = np.transpose(position, (1, 0, 2))  # (nparticles, input_sequence_length, dimension)
-        velocity = self._data[trajectory_idx][1][time_idx - self._input_length_sequence:time_idx]
-        velocity = np.transpose(velocity, (1, 0, 2)) # (nparticles, input_sequence_length, dimension)
-        n_cells = np.transpose(self._data[trajectory_idx][2])
-        n_cells = n_cells[time_idx]
-        cells = self._data[trajectory_idx][3][time_idx]
-        cells = cells[:n_cells, :]
-        free_surf = np.transpose(self._data[trajectory_idx][4][time_idx])
-        bound =  np.transpose(self._data[trajectory_idx][5])
-        #particle_move = np.transpose(particle_move) # (nparticles, input_sequence_length)
-        n_particles_per_example = position.shape[0] # scalar
-        n_cells_per_example = cells.shape[0]
+        position = self._data[trajectory_idx][0][time_idx-1] # current position
+        velocity = self._data[trajectory_idx][1][time_idx - self._input_velocity_steps:time_idx] # current + previous C velocities
+        velocity = np.transpose(velocity, (1, 0, 2)) # (nparticles, input_velocity_steps, dimension)
+        n_cells = np.transpose(self._data[trajectory_idx][2]) 
+        n_cells = n_cells[time_idx-1] # number of mesh-graph edges at the current step
+        cells = self._data[trajectory_idx][3][time_idx-1]
+        cells = cells[:n_cells, :] # connectivity matrix at the current step
+
+        free_surf = np.transpose(self._data[trajectory_idx][4][time_idx-1]) # free surf particles at the current step TO DO 
+        bound =  np.transpose(self._data[trajectory_idx][5]) # boundary particles at the current step TO DO 
+        
+        # n of particles and edges in the current example
+        n_particles_per_example = position.shape[0] # scalar, nuber of particle is constant
+        n_cells_per_example = cells.shape[0] # vector, number of edges is variable
+        
         # Training label: next step velocity
         label = self._data[trajectory_idx][1][time_idx]
 
@@ -226,14 +228,14 @@ class TrajectoriesDataset(torch.utils.data.Dataset):
         return trajectory
 
 
-def get_data_loader_by_samples(path, input_length_sequence, batch_size, shuffle=True):
+def get_data_loader_by_samples(path, input_velocity_steps, batch_size, shuffle=True):
     
     """
     Returns a pytorch data loader for the training dataset.
 
     Args:
         path (str): Path to dataset.
-        input_length_sequence (int): Length of input sequence.
+        input_velocity_steps (int): Length of input sequence.
         batch_size (int): Batch size.
         shuffle (bool, optional): Whether to shuffle the dataset. Defaults to True.
 
@@ -241,7 +243,7 @@ def get_data_loader_by_samples(path, input_length_sequence, batch_size, shuffle=
         torch.utils.data.DataLoader: pytorch data loader for the dataset.
     """
 
-    dataset = SamplesDataset(path, input_length_sequence)
+    dataset = SamplesDataset(path, input_velocity_steps)
     return torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=16,
                                        pin_memory=True, collate_fn=collate_fn)
 

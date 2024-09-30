@@ -15,7 +15,6 @@ from pyevtk.hl import pointsToVTK
 
 flags.DEFINE_string("output_path", None, help="Directory where output.pkl are located.")
 flags.DEFINE_string("output_file", None, help="Name of output .pkl file.")
-flags.DEFINE_integer("step_stride", 3, help="Stride of steps to skip.") # TO DO
 
 FLAGS = flags.FLAGS
 
@@ -77,13 +76,16 @@ class VTKwriter():
         for i, coord in enumerate(self.trajectory):
             filename = f"{path}/test.vtk.{i}"
             with open(filename, 'w') as file:
+                
                 # Write intro.
                 file.write("# vtk DataFile Version 1.0\n2D Unstructured Grid of Linear Triangles\nASCII\n\nDATASET UNSTRUCTURED_GRID\n")
+                
                 # Write points.
                 file.write(f"POINTS \t {coord.shape[0]} float\n")
                 pos=np.hstack((coord, (np.full((coord.shape[0],1),0))))
                 np.savetxt(file, pos, delimiter='\t', fmt='%.6f')
                 file.write("\n")
+                
                 # Write cells
                 file.write(f"CELLS \t {self.cells[i].shape[0]} \t {self.cells[i].shape[0]*4}\n")
                 cell=np.hstack(((np.full((self.cells[i].shape[0],1),3)), self.cells[i]))
@@ -92,12 +94,14 @@ class VTKwriter():
                 file.write(f"CELL_TYPES \t {self.cells[i].shape[0]}\n")        
                 cell_type=np.full((self.cells[i].shape[0],1),5)
                 np.savetxt(file, cell_type, delimiter='\t', fmt='%d')
+                
                 # Write velocity
                 file.write(f"POINT_DATA \t {coord.shape[0]} \n")     
                 file.write("VECTORS Velocity float\n")
                 vel=np.hstack((self.velocity[i], (np.full((self.velocity[i].shape[0],1),0))))
                 np.savetxt(file, vel, delimiter='\t', fmt='%.6f')
-                # Write velocity
+                
+                # Write free surface
                 file.write(f"SCALARS FreeSurf float \n")     
                 file.write("LOOKUP_TABLE default\n")
                 print(i)

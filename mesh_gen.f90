@@ -51,12 +51,12 @@ do i1=1,size(elem_array) / 3
     out_array(i1, 3) = elem_array(i1, 3) -1
     do j1=1,3
        do z1=1,3
-        !!if (j1/=z1 .and. (node(out_array(i1, j1) + 1)%bound /= 1 &
-          !!  .or. node(out_array(i1, z1) + 1)%bound /= 1)) then
+        if (j1/=z1 .and. node(out_array(i1, j1) + 1)%bound /= 1 &
+            .and. node(out_array(i1, z1) + 1)%bound /= 1) then
           edges(index, 1) = out_array(i1, j1) 
-          edges(index, 2) = out_array(i1, z1) 
+          edges(index, 2) = out_array(i1, z1)
           index = index + 1
-        !!end if
+        end if
        end do
     end do
 end do
@@ -944,8 +944,8 @@ subroutine fill_struct(node_array, vel_array, free_array, bound_array, n)
   integer, dimension(n) :: bound_array
   
   alpha_surf = 2
-  alpha_inner = 1.2
-  alpha_bound = 1.2
+  alpha_inner = 1.8
+  alpha_bound = 1.4
   alpha_gen = 1.2
   
   npoints = n
@@ -2882,7 +2882,7 @@ do k1=1,nelement
         l3= sqrt( (x(3)-x(2))**2+(y(3)-y(2))**2 )
 
         rad_in=jac/(l1+l2+l3) 
-        if (2*rad_in<0.5d0*radius .or. 2*rad_in>1.5d0*radius)then
+        if (2*rad_in<0.8d0*radius .or. 2*rad_in>1.2d0*radius)then
             
             if (l1<l3 .and. l2<l3 .and. node(n(1))%free_surf==0 .and. node(n(1))%bound==0 .and. node(n(1))%euler==0)then
                 
