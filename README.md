@@ -1,5 +1,5 @@
-# Neural PFEM
-A Graph Neural Network (GNN) based data-driven simulator which learns from PFEM simulation data to build surrogate models.
+# NeuralPFEM
+A Graph Neural Network (GNN) based data-driven simulator to build surrogate models for lagrangian fluid simulations.
 
 Based on https://doi.org/10.48550/arXiv.2002.09405 (https://github.com/deepmind/deepmind-research/tree/master/learning_to_simulate) 
 and https://doi.org/10.1016/j.compgeo.2023.106015 (https://github.com/geoelements/gns/)
@@ -10,9 +10,9 @@ TO DO
 
 Usage
 -----
-All the following command must be launched in gns folder.
+All the following command must be launched in NeuralPFEM/ folder.
 For a list of all the possible flags that can be used to change options in the code:
-TO DO
+python3 -m npfem/NPFEM.py --help 
 
 Launch training:
 ```
@@ -39,7 +39,7 @@ python3 -m gns.GNS --mode=<"valid" or "test"> --data_path="<input-data-path>" --
 python3 -m gns.GNS --mode="test" --data_path="gns/datasets/data1/" --model_path="gns/models/model1/" --model_file="model-1000.pt" --output_path="gns/outputs/output1/"
 ```
 
-Visualize output generating gif or vtk files:
+Generate vtk files for outputs:
 ```
 python3 -m gns.render_output --output_mode=<"gif" or "vtk"> --output_path=<"output-data-path"> --output_file=<"file-with-output-data-to-visulize">
 # For example:
