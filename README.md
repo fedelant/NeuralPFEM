@@ -6,8 +6,13 @@ and https://doi.org/10.1016/j.compgeo.2023.106015 (https://github.com/geoelement
 
 Dependencies and installation
 -----------------------------
-TO DO
-Compile fortran code of the mesher using f2py to bind it with python code:
+numpy v1.26.1
+pytorch
+pytorch3d
+absl
+torch_geometric
+
+Compile fortran code of the mesher using f2py to bind it with python code (gfortran required):
 ```
 gfortran -free -c 01_modules.f90
 f2py -c mesh_gen.f90 01_modules.o -m mesh_gen
